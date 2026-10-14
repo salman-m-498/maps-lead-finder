@@ -128,7 +128,7 @@ const CATS = {
 const DEFAULT_ON = ['Restaurants, cafes and bars', 'Trades (plumbing, electrical, building)'];
 const SOCIAL_ONLY = /(^|\.)(facebook|instagram|linktr\.ee|linktree|tiktok|yelp|tripadvisor|google|business\.site|youtube|x|twitter)\.(com|ee|site)$/i;
 const BUILDERS = /(wixsite\.com|weebly\.com|godaddysites\.com|square\.site|squarespace\.com|blogspot\.com|wordpress\.com|webs\.com|jimdosite\.com|mystrikingly\.com|carrd\.co|yolasite\.com)$/i;
-const MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+const MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
 let rows = [], stopFlag = false, sortKey = 'score', sortDir = -1;
 
 // build category checkboxes
@@ -182,21 +182,21 @@ async function geocode(city, country, post) {
 }
 
 let ctl2 = null;
-async function overpass(query) {
+async function overpass(query, label) {
   let last = new Error('The free OpenStreetMap servers are busy. Try again in a minute, or use a smaller radius.');
-  for (let a = 0; a < 6; a++) {
+  for (let a = 0; a < 4; a++) {
     if (stopFlag) throw new Error('Stopped.');
     const mirror = MIRRORS[a % MIRRORS.length], host = new URL(mirror).hostname;
     ctl2 = new AbortController();
-    const timer = setTimeout(() => ctl2.abort(), 40000);
-    status(`Searching OpenStreetMap (attempt ${a + 1} of 6, server ${host}). Usually 5 to 30 seconds...`);
+    const timer = setTimeout(() => ctl2.abort(), 30000);
+    status(`${label}: asking ${host} (attempt ${a + 1} of 4). Usually 5 to 20 seconds...`);
     try {
       const res = await fetch(mirror, { method: 'POST', signal: ctl2.signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query) });
       if (res.ok) { const d = await res.json(); if (d.elements && d.elements.length) return d; if (!d.remark) return d; last = new Error('OpenStreetMap ran out of time on ' + host + '.'); }
       else last = new Error('OpenStreetMap server ' + host + ' returned ' + res.status + '.');
     } catch (e) {
       if (stopFlag) throw new Error('Stopped.');
-      last = new Error(e.name === 'AbortError' ? host + ' took longer than 40 seconds.' : 'Network error reaching ' + host + '.');
+      last = new Error(e.name === 'AbortError' ? host + ' took longer than 30 seconds.' : 'Network error reaching ' + host + '.');
     } finally { clearTimeout(timer); }
     await sleep(1500);
   }
@@ -205,8 +205,8 @@ async function overpass(query) {
 
 function buildQuery(c, rKm, filters) {
   const around = `(around:${Math.round(rKm * 1000)},${c.lat},${c.lng})`;
-  const parts = filters.map(f => `nwr${f}["name"]${around};`).join('');
-  return `[out:json][timeout:35];(${parts});out center tags 6000;`;
+  const parts = filters.map(f => `nw${f}["name"]${around};`).join('');
+  return `[out:json][timeout:25];(${parts});out center tags 6000;`;
 }
 
 function toRow(el, c) {
@@ -279,14 +279,14 @@ async function enrichRow(r) {
 async function run() {
   const city = $('city').value.trim(), country = $('country').value.trim(), post = $('postcode').value.trim();
   const rKm = toKm(Number($('radius').value), $('unit').value), max = Number($('max').value) || 300;
-  let filters = [...document.querySelectorAll('#cats input:checked')].flatMap(i => CATS[i.value]);
+  const jobs = [...document.querySelectorAll('#cats input:checked')].map(i => ({ name: i.value, filters: CATS[i.value] }));
   const custom = $('custom').value.trim();
   if (custom) {
     const m = custom.match(/^([a-z_:]+)=([\w\-: ]+)$/i);
     if (!m) return status('Extra tag must look like key=value, for example shop=florist.', true);
-    filters.push(`["${m[1]}"="${m[2]}"]`);
+    jobs.push({ name: 'Custom tag', filters: [`["${m[1]}"="${m[2]}"]`] });
   }
-  if (!filters.length) return status('Pick at least one business type.', true);
+  if (!jobs.length) return status('Pick at least one business type.', true);
   if (!country || !(city || post) || !(rKm > 0)) return status('Fill in country, a city or post code, and radius.', true);
   if (rKm > 50) return status('Keep the radius at 50 km (about 30 miles) or less.', true);
   rows = []; stopFlag = false; render();
@@ -295,17 +295,26 @@ async function run() {
     status('Locating ' + (post || city) + '...');
     $('status').dataset.note = '';
     const c = await geocode(city, country, post);
-    status(`${$('status').dataset.note ? $('status').dataset.note + ' ' : ''}Searching OpenStreetMap around ${c.label}. Large areas can take up to a minute...`);
+    const note = $('status').dataset.note ? $('status').dataset.note + ' ' : '';
+    status(note + 'Searching around ' + c.label + '...');
     progress(10);
-    const data = await overpass(buildQuery(c, rKm, filters));
-    if (data.remark && !(data.elements || []).length) throw new Error('OpenStreetMap timed out. Try a smaller radius or fewer business types.');
-    const seen = new Set();
-    for (const el of data.elements || []) {
-      const key = el.type + el.id; if (seen.has(key)) continue; seen.add(key);
-      const r = toRow(el, c); if (!r) continue;
-      if ($('contactonly').checked && !(r.phone || r.email || r.website || r.facebook || r.instagram)) continue;
-      Object.assign(r, assess(r)); rows.push(r);
+    const seen = new Set(); let failed = [], lastErr = null;
+    for (let j = 0; j < jobs.length; j++) {
+      if (stopFlag) break;
+      try {
+        const data = await overpass(buildQuery(c, rKm, jobs[j].filters), `${jobs[j].name} (${j + 1} of ${jobs.length})`);
+        for (const el of data.elements || []) {
+          const key = el.type + el.id; if (seen.has(key)) continue; seen.add(key);
+          const r = toRow(el, c); if (!r) continue;
+          if ($('contactonly').checked && !(r.phone || r.email || r.website || r.facebook || r.instagram)) continue;
+          Object.assign(r, assess(r)); rows.push(r);
+        }
+        render();
+      } catch (e) { if (stopFlag) break; failed.push(jobs[j].name); lastErr = e; }
+      progress(10 + (j + 1) / jobs.length * 30);
     }
+    if (failed.length === jobs.length && !stopFlag) throw new Error(lastErr.message + ' Try a radius of 2 to 3 km, tick just one business type, or try again in a few minutes.');
+    if (failed.length) $('status').dataset.note = `Could not load: ${failed.join(', ')}. Search those again separately. `;
     rows.sort((a, b) => a.distance - b.distance);
     if (rows.length > max) rows = rows.slice(0, max);
     render(); progress(40);
@@ -325,7 +334,7 @@ async function run() {
       await Promise.all([worker(), worker(), worker(), worker()]);
     }
     progress(100);
-    status(stopFlag ? `Stopped. ${rows.length} results.` : `Done. ${rows.length} businesses, ${rows.filter(r => r.score >= 2).length} hot leads.`);
+    status((stopFlag ? `Stopped. ${rows.length} results.` : `Done. ${rows.length} businesses, ${rows.filter(r => r.score >= 2).length} hot leads.`) + ' ' + ($('status').dataset.note || ''));
   } catch (e) {
     status(e.message || String(e), true);
   } finally {
