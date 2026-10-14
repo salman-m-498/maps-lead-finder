@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lead Finder (OpenStreetMap)</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14181f;--mute:#5c6675;--line:#dde1e7;--acc:#0a5cff;--accink:#fff;--ok:#0b7a3b;--warn:#a85a00;--bad:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#10131a;--card:#181c25;--ink:#e8ebf0;--mute:#98a2b3;--line:#2b3140;--acc:#5b8cff;--accink:#0b1020;--ok:#4cc38a;--warn:#f0a43c;--bad:#ff7b6b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1200px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:22px;margin:0 0 4px}
+p.sub{color:var(--mute);margin:0 0 18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+label{display:block;font-size:13px;color:var(--mute);margin-bottom:4px}
+input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit}
+input:focus,select:focus,button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px}
+button{padding:9px 14px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;cursor:pointer}
+button.primary{background:var(--acc);color:var(--accink);border-color:var(--acc);font-weight:600}
+button:disabled{opacity:.5;cursor:not-allowed}
+.chk{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--ink);margin:0}
+.chk input{width:auto}
+fieldset{border:1px solid var(--line);border-radius:8px;margin:14px 0 0;padding:10px 12px}
+legend{font-size:13px;color:var(--mute);padding:0 6px}
+.cats{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px 14px}
+details summary{cursor:pointer;color:var(--mute);margin-top:12px}
+#status{font-size:14px;color:var(--mute);min-height:20px;margin-top:10px}
+#status.err{color:var(--bad)}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:900px;font-size:13.5px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{position:sticky;top:0;background:var(--card);cursor:pointer;white-space:nowrap}
+td a{color:var(--acc);word-break:break-all}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;border:1px solid var(--line);white-space:nowrap}
+.s3{color:var(--bad);border-color:var(--bad)}.s2{color:var(--warn);border-color:var(--warn)}.s1{color:var(--ok);border-color:var(--ok)}
+.small{font-size:12.5px;color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+<h1>Lead Finder</h1>
+<p class="sub">Find local businesses with no website or an outdated one, then export them to CSV. Uses free OpenStreetMap data: no API key, no billing.</p>
+
+<section class="card">
+  <div class="grid">
+    <div><label for="country">Country</label><input id="country" value="United States"></div>
+    <div><label for="city">City or area</label><input id="city" value="Austin"></div>
+    <div><label for="postcode">Post code (optional)</label><input id="postcode" placeholder="e.g. 400001"></div>
+    <div><label for="radius">Radius</label><input id="radius" type="number" min="1" max="50" value="5"></div>
+    <div><label for="unit">Unit</label><select id="unit"><option value="km">Kilometers</option><option value="mi">Miles</option></select></div>
+    <div><label for="max">Max results</label><input id="max" type="number" min="1" max="5000" value="300"></div>
+  </div>
+
+  <fieldset>
+    <legend>Business types</legend>
+    <div class="cats" id="cats"></div>
+  </fieldset>
+
+  <label class="chk" style="margin-top:14px"><input id="contactonly" type="checkbox" checked> Skip businesses with no phone, email, website or social link (nothing to contact them with)</label>
+  <label class="chk" style="margin-top:8px"><input id="enrich" type="checkbox" checked> Also visit each website to find emails, social links and signs it is outdated</label>
+
+  <details>
+    <summary>Advanced</summary>
+    <div class="grid" style="margin-top:10px">
+      <div><label for="custom">Extra OpenStreetMap tag (key=value)</label><input id="custom" placeholder="shop=florist"></div>
+      <div><label for="proxy">CORS proxy for website visits ({url} is replaced)</label><input id="proxy" value="https://corsproxy.io/?url={url}"></div>
+    </div>
+    <p class="small">Browsers block reading most websites directly, so website visits go through the proxy. Public proxies are unreliable; for steady use, host your own (a Cloudflare Worker works) and paste its URL here.</p>
+  </details>
+
+  <div class="row">
+    <button id="go" class="primary">Search</button>
+    <button id="stop" disabled>Stop</button>
+    <button id="dl" disabled>Download CSV</button>
+  </div>
+  <div id="status" role="status"></div>
+  <div class="bar"><i id="prog"></i></div>
+  <p class="small">Post codes work best in countries that use them (India PIN codes, UK, US ZIP and so on). The UAE has no post code system, so use a city or area such as Dubai Marina. OpenStreetMap is volunteer-edited. A business showing "No website" may simply be missing that detail, so use the Google link in each row to double-check before you reach out.</p>
+</section>
+
+<section>
+  <div class="row" style="margin:0 0 10px">
+    <label for="filter" style="margin:0">Show</label>
+    <select id="filter" style="width:auto">
+      <option value="all">All results</option>
+      <option value="hot">Hot leads (score 2 or 3)</option>
+      <option value="No website">No website</option>
+      <option value="Social page only">Social page only</option>
+      <option value="Outdated or basic site">Outdated or basic site</option>
+      <option value="Has website">Has a decent website</option>
+    </select>
+    <span id="count" class="small"></span>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr id="thead"></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table></div>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const COLS = [
+  ['name','Name'],['lead','Lead type'],['score','Score'],['notes','Why'],['phone','Phone'],['email','Email'],
+  ['website','Website'],['facebook','Facebook'],['instagram','Instagram'],['linkedin','LinkedIn'],['twitter','X / Twitter'],
+  ['youtube','YouTube'],['tiktok','TikTok'],['address','Address'],['category','Category'],['distance','Distance (km)'],['maps','Check on Google']
+];
+// Each category is a list of OpenStreetMap tag filters
+const CATS = {
+  'Restaurants, cafes and bars': ['["amenity"~"^(restaurant|cafe|fast_food|bar|pub|ice_cream|bakery)$"]','["shop"~"^(bakery|pastry|coffee|deli)$"]'],
+  'Trades (plumbing, electrical, building)': ['["craft"~"^(plumber|electrician|carpenter|hvac|roofer|painter|builder|gardener|glaziery|locksmith|plasterer|tiler|stonemason|handyman|floorer|window_construction|cleaning)$"]','["shop"="trade"]'],
+  'Beauty and personal care': ['["shop"~"^(hairdresser|beauty|cosmetics|massage|tattoo|nails|barber)$"]','["amenity"="spa"]'],
+  'Health and medical': ['["amenity"~"^(dentist|doctors|clinic|veterinary|physiotherapist|optician)$"]','["healthcare"]','["shop"="optician"]'],
+  'Auto and motorcycle': ['["shop"~"^(car_repair|car|car_parts|tyres|motorcycle)$"]','["amenity"="car_wash"]'],
+  'Fitness and wellness': ['["leisure"~"^(fitness_centre|sports_centre|yoga|dance)$"]'],
+  'Professional services': ['["office"~"^(lawyer|accountant|estate_agent|insurance|financial|architect|consulting|tax_advisor|notary|employment_agency)$"]'],
+  'Hotels and lodging': ['["tourism"~"^(hotel|guest_house|motel|hostel|apartment|bed_and_breakfast)$"]'],
+  'Retail shops': ['["shop"]'],
+  'Education and childcare': ['["amenity"~"^(kindergarten|childcare|driving_school|music_school|language_school)$"]'],
+  'Real estate and property': ['["office"="estate_agent"]','["craft"="property_management"]'],
+  'Any named craft or office': ['["craft"]','["office"]']
+};
+const DEFAULT_ON = ['Restaurants, cafes and bars', 'Trades (plumbing, electrical, building)'];
+const SOCIAL_ONLY = /(^|\.)(facebook|instagram|linktr\.ee|linktree|tiktok|yelp|tripadvisor|google|business\.site|youtube|x|twitter)\.(com|ee|site)$/i;
+const BUILDERS = /(wixsite\.com|weebly\.com|godaddysites\.com|square\.site|squarespace\.com|blogspot\.com|wordpress\.com|webs\.com|jimdosite\.com|mystrikingly\.com|carrd\.co|yolasite\.com)$/i;
+const MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+let rows = [], stopFlag = false, sortKey = 'score', sortDir = -1;
+
+// build category checkboxes
+Object.keys(CATS).forEach((name, i) => {
+  const l = document.createElement('label'); l.className = 'chk';
+  const c = document.createElement('input'); c.type = 'checkbox'; c.value = name; c.checked = DEFAULT_ON.includes(name);
+  l.appendChild(c); l.appendChild(document.createTextNode(name)); $('cats').appendChild(l);
+});
+
+// ---------- helpers ----------
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function status(msg, err) { const s = $('status'); s.textContent = msg; s.className = err ? 'err' : ''; }
+function progress(p) { $('prog').style.width = Math.max(0, Math.min(100, p)) + '%'; }
+function toKm(v, unit) { return unit === 'mi' ? v * 1.609344 : v; }
+function haversine(a, b, c, d) {
+  const R = 6371, t = x => x * Math.PI / 180, dLa = t(c - a), dLo = t(d - b);
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(t(a)) * Math.cos(t(c)) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function csvCell(v) {
+  let s = v == null ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;            // stop spreadsheet formula injection
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+const fixUrl = u => { u = (u || '').trim().split(';')[0].trim(); if (!u) return ''; return /^https?:\/\//i.test(u) ? u : 'https://' + u.replace(/^\/+/, ''); };
+
+// ---------- OpenStreetMap ----------
+async function nominatim(params) {
+  let res;
+  try { res = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&' + new URLSearchParams(params), { headers: { 'Accept': 'application/json' } }); }
+  catch (e) { throw new Error('The browser blocked the request to OpenStreetMap. Open this file in a regular browser (Chrome, Safari, Edge, Firefox) rather than a preview inside an app, and turn off any ad blocker or VPN filter for this page.'); }
+  if (!res.ok) throw new Error('Location lookup failed (' + res.status + '). Wait a moment and try again.');
+  return res.json();
+}
+async function geocode(city, country, post) {
+  let d = [];
+  if (post) {
+    // 1) structured search: post code + country (+ city if given), 2) post code + country as free text
+    d = await nominatim({ postalcode: post, country, ...(city ? { city } : {}) });
+    if (!d.length) d = await nominatim({ q: [post, city, country].filter(Boolean).join(', ') });
+    if (!d.length && city) {
+      d = await nominatim({ q: city + ', ' + country });
+      if (d.length) $('status').dataset.note = `Post code ${post} was not found, so the search is centered on ${city} instead.`;
+    }
+    if (!d.length) throw new Error(`Could not find post code ${post} in ${country}. Check it, or use a city or area name instead. Some countries, such as the UAE, do not use post codes.`);
+  } else {
+    d = await nominatim({ q: city + ', ' + country });
+    if (!d.length) throw new Error(`Could not find "${city}, ${country}". Check the spelling.`);
+  }
+  return { lat: +d[0].lat, lng: +d[0].lon, label: d[0].display_name.split(',').slice(0, 3).join(',') };
+}
+
+async function overpass(query) {
+  let last = new Error('Overpass is busy. Try again in a minute.');
+  for (let a = 0; a < 4; a++) {
+    try {
+      const res = await fetch(MIRRORS[a % MIRRORS.length], { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query) });
+      if (res.ok) return res.json();
+      last = new Error('OpenStreetMap server returned ' + res.status + '.');
+      await sleep(1500 * (a + 1));
+    } catch (e) { last = new Error('Network error reaching OpenStreetMap. Check your connection or any ad blocker.'); await sleep(1000); }
+  }
+  throw last;
+}
+
+function buildQuery(c, rKm, filters) {
+  const around = `(around:${Math.round(rKm * 1000)},${c.lat},${c.lng})`;
+  const parts = filters.map(f => `nwr${f}["name"]${around};`).join('');
+  return `[out:json][timeout:90];(${parts});out center tags 6000;`;
+}
+
+function toRow(el, c) {
+  const t = el.tags || {}, lat = el.lat ?? (el.center && el.center.lat), lon = el.lon ?? (el.center && el.center.lon);
+  if (lat == null) return null;
+  const g = (...k) => { for (const x of k) if (t[x]) return String(t[x]).split(';')[0].trim(); return ''; };
+  const addr = [[g('addr:housenumber'), g('addr:street')].filter(Boolean).join(' '), g('addr:city'), g('addr:postcode')].filter(Boolean).join(', ');
+  const cat = g('craft', 'shop', 'amenity', 'office', 'healthcare', 'leisure', 'tourism').replace(/_/g, ' ');
+  const r = {
+    name: t.name, phone: g('phone', 'contact:phone', 'contact:mobile'), website: fixUrl(g('website', 'contact:website', 'url')),
+    email: g('email', 'contact:email'), facebook: fixUrl(g('contact:facebook', 'facebook')), instagram: fixUrl(g('contact:instagram', 'instagram')),
+    linkedin: fixUrl(g('contact:linkedin')), twitter: fixUrl(g('contact:twitter', 'twitter')), youtube: fixUrl(g('contact:youtube')), tiktok: fixUrl(g('contact:tiktok')),
+    address: addr, category: cat, distance: haversine(c.lat, c.lng, lat, lon).toFixed(1),
+    maps: 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent([t.name, addr || (lat + ',' + lon)].join(' '))
+  };
+  return r;
+}
+
+// ---------- lead assessment ----------
+function assess(r) {
+  let host = '';
+  try { host = new URL(r.website).hostname.replace(/^www\./, ''); } catch (e) {}
+  const contact = r.phone ? ' (has a phone number)' : '';
+  if (!r.website) {
+    if (r.facebook || r.instagram) return { lead: 'Social page only', score: 3, notes: 'Only a social page listed' + contact };
+    return { lead: 'No website', score: 3, notes: 'No website listed in OpenStreetMap' + contact };
+  }
+  if (SOCIAL_ONLY.test(host)) return { lead: 'Social page only', score: 3, notes: 'Website is a ' + host + ' page' + contact };
+  const n = [];
+  if (BUILDERS.test(host)) n.push('Free site-builder subdomain');
+  if (/^http:/i.test(r.website)) n.push('Not HTTPS');
+  return n.length ? { lead: 'Outdated or basic site', score: 2, notes: n.join('; ') } : { lead: 'Has website', score: 1, notes: '' };
+}
+
+async function enrichRow(r) {
+  if (!r.website || r.lead === 'Social page only') return;
+  const url = $('proxy').value.replace('{url}', encodeURIComponent(r.website));
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 12000);
+  try {
+    const res = await fetch(url, { signal: ctl.signal });
+    if (!res.ok) throw new Error(res.status);
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const emails = new Set(r.email ? [r.email.toLowerCase()] : []);
+    doc.querySelectorAll('a[href^="mailto:"]').forEach(a => emails.add(a.getAttribute('href').slice(7).split('?')[0].trim().toLowerCase()));
+    (html.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []).forEach(e => { if (!/\.(png|jpe?g|gif|svg|webp|css|js)$/i.test(e) && !/(sentry|wixpress|example\.)/i.test(e)) emails.add(e.toLowerCase()); });
+    r.email = [...emails].slice(0, 3).join('; ');
+    const soc = { facebook: /facebook\.com/i, instagram: /instagram\.com/i, linkedin: /linkedin\.com/i, twitter: /(twitter|x)\.com/i, youtube: /youtube\.com/i, tiktok: /tiktok\.com/i };
+    doc.querySelectorAll('a[href]').forEach(a => {
+      const h = a.getAttribute('href') || '';
+      if (!/^https?:/i.test(h) || /(sharer|share\?|intent\/|\/share\/|plugins)/i.test(h)) return;
+      let host = ''; try { host = new URL(h).hostname; } catch (e) { return; }
+      for (const k in soc) if (!r[k] && soc[k].test(host)) r[k] = h;
+    });
+    const flags = [];
+    if (!doc.querySelector('meta[name="viewport"]')) flags.push('Not mobile friendly');
+    const years = [...(doc.body ? doc.body.textContent : '').matchAll(/(?:©|&copy;|copyright)\s*(?:\d{4}\s*[-–]\s*)?((?:19|20)\d{2})/gi)].map(m => +m[1]);
+    if (years.length && Math.max(...years) <= new Date().getFullYear() - 3) flags.push('Footer year ' + Math.max(...years));
+    if (doc.querySelector('table[width], font, marquee, center')) flags.push('Legacy HTML tags');
+    if (flags.length) {
+      r.notes = [r.notes, ...flags].filter(Boolean).join('; ');
+      if (r.score < 2) { r.score = 2; r.lead = 'Outdated or basic site'; }
+    }
+  } catch (e) {
+    r.notes = [r.notes, 'Site could not be checked'].filter(Boolean).join('; ');
+  } finally { clearTimeout(t); }
+}
+
+// ---------- main run ----------
+async function run() {
+  const city = $('city').value.trim(), country = $('country').value.trim(), post = $('postcode').value.trim();
+  const rKm = toKm(Number($('radius').value), $('unit').value), max = Number($('max').value) || 300;
+  let filters = [...document.querySelectorAll('#cats input:checked')].flatMap(i => CATS[i.value]);
+  const custom = $('custom').value.trim();
+  if (custom) {
+    const m = custom.match(/^([a-z_:]+)=([\w\-: ]+)$/i);
+    if (!m) return status('Extra tag must look like key=value, for example shop=florist.', true);
+    filters.push(`["${m[1]}"="${m[2]}"]`);
+  }
+  if (!filters.length) return status('Pick at least one business type.', true);
+  if (!country || !(city || post) || !(rKm > 0)) return status('Fill in country, a city or post code, and radius.', true);
+  if (rKm > 50) return status('Keep the radius at 50 km (about 30 miles) or less.', true);
+  rows = []; stopFlag = false; render();
+  $('go').disabled = true; $('stop').disabled = false; $('dl').disabled = true; progress(0);
+  try {
+    status('Locating ' + (post || city) + '...');
+    $('status').dataset.note = '';
+    const c = await geocode(city, country, post);
+    status(`${$('status').dataset.note ? $('status').dataset.note + ' ' : ''}Searching OpenStreetMap around ${c.label}. Large areas can take up to a minute...`);
+    progress(10);
+    const data = await overpass(buildQuery(c, rKm, filters));
+    if (data.remark && !(data.elements || []).length) throw new Error('OpenStreetMap timed out. Try a smaller radius or fewer business types.');
+    const seen = new Set();
+    for (const el of data.elements || []) {
+      const key = el.type + el.id; if (seen.has(key)) continue; seen.add(key);
+      const r = toRow(el, c); if (!r) continue;
+      if ($('contactonly').checked && !(r.phone || r.email || r.website || r.facebook || r.instagram)) continue;
+      Object.assign(r, assess(r)); rows.push(r);
+    }
+    rows.sort((a, b) => a.distance - b.distance);
+    if (rows.length > max) rows = rows.slice(0, max);
+    render(); progress(40);
+    if (!rows.length) { status('No matches. Try a bigger radius, more business types, or untick the contact filter.'); return; }
+
+    if ($('enrich').checked) {
+      const todo = rows.filter(r => r.website && r.lead !== 'Social page only');
+      let i = 0, fin = 0;
+      const worker = async () => {
+        while (i < todo.length && !stopFlag) {
+          const r = todo[i++]; await enrichRow(r);
+          fin++; progress(40 + fin / todo.length * 60);
+          status(`Checking websites ${fin}/${todo.length}...`);
+          if (fin % 5 === 0) render();
+        }
+      };
+      await Promise.all([worker(), worker(), worker(), worker()]);
+    }
+    progress(100);
+    status(stopFlag ? `Stopped. ${rows.length} results.` : `Done. ${rows.length} businesses, ${rows.filter(r => r.score >= 2).length} hot leads.`);
+  } catch (e) {
+    status(e.message || String(e), true);
+  } finally {
+    $('go').disabled = false; $('stop').disabled = true; $('dl').disabled = !rows.length; render();
+  }
+}
+
+// ---------- table ----------
+function visible() {
+  const f = $('filter').value;
+  return rows.filter(r => f === 'all' || (f === 'hot' ? r.score >= 2 : r.lead === f));
+}
+function render() {
+  const th = $('thead'); th.textContent = '';
+  COLS.forEach(([k, l]) => { const e = document.createElement('th'); e.textContent = l + (k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''); e.onclick = () => { sortDir = sortKey === k ? -sortDir : -1; sortKey = k; render(); }; th.appendChild(e); });
+  const list = visible();
+  list.sort((a, b) => { const x = a[sortKey], y = b[sortKey]; return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x ?? '').localeCompare(String(y ?? ''), undefined, { numeric: true })) * sortDir; });
+  const tb = $('tbody'); tb.textContent = '';
+  list.forEach(r => {
+    const tr = document.createElement('tr');
+    COLS.forEach(([k]) => {
+      const td = document.createElement('td'), v = r[k];
+      if (k === 'lead') { const s = document.createElement('span'); s.className = 'tag s' + r.score; s.textContent = v; td.appendChild(s); }
+      else if (/^https?:\/\//i.test(v || '')) { const a = document.createElement('a'); a.href = v; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = k === 'maps' ? 'Search' : v.replace(/^https?:\/\/(www\.)?/, '').slice(0, 40); td.appendChild(a); }
+      else td.textContent = v == null ? '' : v;
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  $('count').textContent = rows.length ? `${list.length} of ${rows.length} shown` : '';
+}
+
+function download() {
+  const list = visible();
+  const csv = '\ufeff' + [COLS.map(c => csvCell(c[1])).join(',')].concat(list.map(r => COLS.map(([k]) => csvCell(r[k])).join(','))).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `leads-${($('postcode').value.trim() + '-' + $('city').value.trim()).replace(/\W+/g, '-').toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+$('go').onclick = run;
+$('stop').onclick = () => { stopFlag = true; status('Stopping...'); };
+$('dl').onclick = download;
+$('filter').onchange = render;
+render();
+</script>
+</body>
+</html>
