@@ -128,7 +128,7 @@ const CATS = {
 const DEFAULT_ON = ['Restaurants, cafes and bars', 'Trades (plumbing, electrical, building)'];
 const SOCIAL_ONLY = /(^|\.)(facebook|instagram|linktr\.ee|linktree|tiktok|yelp|tripadvisor|google|business\.site|youtube|x|twitter)\.(com|ee|site)$/i;
 const BUILDERS = /(wixsite\.com|weebly\.com|godaddysites\.com|square\.site|squarespace\.com|blogspot\.com|wordpress\.com|webs\.com|jimdosite\.com|mystrikingly\.com|carrd\.co|yolasite\.com)$/i;
-const MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const MIRRORS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
 let rows = [], stopFlag = false, sortKey = 'score', sortDir = -1;
 
 // build category checkboxes
@@ -181,15 +181,24 @@ async function geocode(city, country, post) {
   return { lat: +d[0].lat, lng: +d[0].lon, label: d[0].display_name.split(',').slice(0, 3).join(',') };
 }
 
+let ctl2 = null;
 async function overpass(query) {
-  let last = new Error('Overpass is busy. Try again in a minute.');
-  for (let a = 0; a < 4; a++) {
+  let last = new Error('The free OpenStreetMap servers are busy. Try again in a minute, or use a smaller radius.');
+  for (let a = 0; a < 6; a++) {
+    if (stopFlag) throw new Error('Stopped.');
+    const mirror = MIRRORS[a % MIRRORS.length], host = new URL(mirror).hostname;
+    ctl2 = new AbortController();
+    const timer = setTimeout(() => ctl2.abort(), 40000);
+    status(`Searching OpenStreetMap (attempt ${a + 1} of 6, server ${host}). Usually 5 to 30 seconds...`);
     try {
-      const res = await fetch(MIRRORS[a % MIRRORS.length], { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query) });
-      if (res.ok) return res.json();
-      last = new Error('OpenStreetMap server returned ' + res.status + '.');
-      await sleep(1500 * (a + 1));
-    } catch (e) { last = new Error('Network error reaching OpenStreetMap. Check your connection or any ad blocker.'); await sleep(1000); }
+      const res = await fetch(mirror, { method: 'POST', signal: ctl2.signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query) });
+      if (res.ok) { const d = await res.json(); if (d.elements && d.elements.length) return d; if (!d.remark) return d; last = new Error('OpenStreetMap ran out of time on ' + host + '.'); }
+      else last = new Error('OpenStreetMap server ' + host + ' returned ' + res.status + '.');
+    } catch (e) {
+      if (stopFlag) throw new Error('Stopped.');
+      last = new Error(e.name === 'AbortError' ? host + ' took longer than 40 seconds.' : 'Network error reaching ' + host + '.');
+    } finally { clearTimeout(timer); }
+    await sleep(1500);
   }
   throw last;
 }
@@ -197,7 +206,7 @@ async function overpass(query) {
 function buildQuery(c, rKm, filters) {
   const around = `(around:${Math.round(rKm * 1000)},${c.lat},${c.lng})`;
   const parts = filters.map(f => `nwr${f}["name"]${around};`).join('');
-  return `[out:json][timeout:90];(${parts});out center tags 6000;`;
+  return `[out:json][timeout:35];(${parts});out center tags 6000;`;
 }
 
 function toRow(el, c) {
@@ -359,7 +368,7 @@ function download() {
 }
 
 $('go').onclick = run;
-$('stop').onclick = () => { stopFlag = true; status('Stopping...'); };
+$('stop').onclick = () => { stopFlag = true; if (ctl2) ctl2.abort(); status('Stopping...'); };
 $('dl').onclick = download;
 $('filter').onchange = render;
 render();
